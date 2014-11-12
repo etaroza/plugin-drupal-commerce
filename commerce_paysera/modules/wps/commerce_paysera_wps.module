@@ -141,7 +141,7 @@ function commerce_paysera_wps_order_form($form, &$form_state, $order, $settings)
             'p_firstname'   => $names['firstname'],
             'p_lastname'    => $names['lastname'],
             'p_email'       => $order->mail,
-            'p_street'      => $billing['thoroughfare'],
+            'p_street'      => $billing['thoroughfare'] . (isset($billing['premise']) ? ' '.$billing['premise'] : ''),
             'p_city'        => $billing['locality'],
             'p_zip'         => $billing['postal_code'],
             'p_countrycode' => $billing['country'],
