@@ -115,7 +115,14 @@ function commerce_paysera_wps_order_form($form, &$form_state, $order, $settings)
 
     $Order   = entity_metadata_wrapper('commerce_order', $order);
     $billing = $Order->commerce_customer_billing->commerce_customer_address->value();
-    $names   = commerce_paysera_wps_get_name($billing['name_line']);
+    if(isset($billing['name_line'])) {
+        $names = commerce_paysera_wps_get_name($billing['name_line']);
+    } else {
+        $names = array(
+            'firstname' => $billing['first_name'],
+            'lastname'  => $billing['last_name'],
+        );
+    }
 
     try {
         $request = WebToPay::buildRequest(array(
@@ -162,6 +169,6 @@ function commerce_paysera_wps_get_name($name) {
     $names = explode(' ', $name);
     return array(
         'firstname' => $names[0],
-        'lastname'  => $names[1],
+        'lastname'  => (isset($names[1]) ? $names[1] : ''), // Last name is optional in the API
     );
 }
