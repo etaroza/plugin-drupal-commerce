@@ -45,39 +45,98 @@ function commerce_paysera_process_ipn($payment_method = NULL) {
             )
         );
     } catch (Exception $e) {
-        exit(get_class($e) . ': ' . $e->getMessage());
+        watchdog('commerce_paysera', 'Invalid IPN received and ignored: @msg', array('@msg' => $e->getMessage()), WATCHDOG_ALERT);
+        return FALSE;
     }
 
-    if ($data['status'] == 1) {
+    if (empty($data['orderid'])) {
+        watchdog('commerce_paysera', 'Unknown order', array(), WATCHDOG_ALERT);
+        return FALSE;
+    }
 
+    $orderData = commerce_order_load($data['orderid']);
 
-        $orderData = commerce_order_load($data['orderid']);
-        $Order     = entity_metadata_wrapper('commerce_order', $orderData);
+    // Exit when we don't get a payment status we recognize.
+    if (!in_array($data['status'], array(0, 1, 2, 3))) {
+        watchdog('commerce_paysera', 'Unknown payment status code: @code', array('@code' => $data['status']), WATCHDOG_ALERT);
+        commerce_payment_redirect_pane_previous_page($orderData);
+        return FALSE;
+    }
 
-        if (intval(number_format($Order->commerce_order_total->amount->value(),0,'','')) > $data['amount']) {
-            exit('Bad amount: ' . $data['amount']);
-        }
+    $Order = entity_metadata_wrapper('commerce_order', $orderData);
+    $orderAmount = intval(number_format($Order->commerce_order_total->amount->value(), 0, '', ''));
+    if ($orderAmount != $data['amount']) {
+        watchdog('commerce_paysera', 'Wrong amount. @amt != @amt2', array('@amt' => $orderAmount, '@amt2' => $data['amount']), WATCHDOG_ALERT);
+        return FALSE;
+    }
 
-        if ($Order->commerce_order_total->currency_code->value() != $data['currency']) {
-            exit('Bad amount: ' . $data['currency']);
-        }
+    $orderCurrency = $Order->commerce_order_total->currency_code->value();
+    if ($orderCurrency != $data['currency']) {
+        watchdog('commerce_paysera', 'Wrong currency. @curr != @curr2', array('@amt' => $orderCurrency, '@amt2' => $data['currency']), WATCHDOG_ALERT);
+        return FALSE;
+    }
 
+    $payments = commerce_payment_transaction_load_multiple(array(), array('order_id' => $data['orderid']));
+    // Assuming there's only one payment transaction done per order
+    $transaction = !empty($payments) ? array_shift($payments) : NULL;
+    $transactionExists = !is_null($transaction);
+
+    if (!is_null($transaction)) {
+        watchdog('commerce_paysera', 'Found existing transaction.', array(), WATCHDOG_DEBUG);
+    } else {
         $transaction = commerce_payment_transaction_new('paysera_wps', $data['orderid']);
-
-        $transaction->instance_id                 = $payment_method['instance_id'];
-        $transaction->remote_id                   = $data['requestid'];
-        $transaction->amount                      = $data['amount'];
-        $transaction->currency_code               = $data['currency'];
-        $transaction->remote_status               = $data['status'];
-        $transaction->created                     = date('Y-m-d H:m:s', strtotime('NOW'));
-        $transaction->payload['original_request'] = $_REQUEST['data'];
-        $transaction->status                      = COMMERCE_PAYMENT_STATUS_SUCCESS;
-        $transaction->message                     = t('The payment has completed.');
-
-        commerce_payment_transaction_save($transaction);
-        commerce_order_status_update($orderData, 'processed', false, false);
+        $transaction->instance_id = $payment_method['instance_id'];
     }
-    exit('OK');
+
+    $transaction->remote_id = (isset($data['requestid']) ? $data['requestid'] : ''); // Not alwasy comes in
+    $transaction->amount = $data['amount'];
+    $transaction->currency_code = $data['currency'];
+    $transaction->remote_status = $data['status'];
+    $transaction->payload[REQUEST_TIME . '-request_data'] = $_REQUEST['data'];
+    $transaction->data = $data;
+
+    /**
+     * Payment status:
+     * 0 - payment has no been executed
+     * 1 - payment successful
+     * 2 - payment order accepted, but not yet executed
+     * 3 - additional payment information
+     */
+    switch ($data['status']) {
+        case 0:
+            $transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+            $transaction->message = t("The payment has not been executed");
+            break;
+        case 1:
+            $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+            $transaction->message = t('Payment successful');
+            break;
+        case 2:
+            $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+            $transaction->message = t('Payment accepted but not yet executed');
+            break;
+        case 3:
+            if ($transactionExists) {
+                // Keep the status of the previous transaction revision
+            } else {
+                // Assume pending, because it's neither success nor failure
+                $transaction->status = COMMERCE_PAYMENT_STATUS_PENDING;
+            }
+            $transaction->message = t('Additional information received');
+            break;
+    }
+
+    // Append additional message comming from Paysera
+    $transaction->message .= (isset($data['paytext']) ? ' ' . $data['paytext'] : '');
+
+
+    commerce_payment_transaction_save($transaction);
+
+    // Finish processing
+    commerce_payment_redirect_pane_next_page($orderData);
+    watchdog('commerce_paysera', 'IPN processed for order @order_number with transaction @txn_id.', array('@txn_id' => $transaction->transaction_id, '@order_number' => $orderData->order_number), WATCHDOG_INFO);
+
+    exit('OK'); // Required by Paysera to digest the callback properly
 }
 
 /**
