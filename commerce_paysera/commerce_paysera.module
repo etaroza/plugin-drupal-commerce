@@ -37,11 +37,60 @@ function commerce_paysera_menu() {
  */
 function commerce_paysera_process_ipn($payment_method = NULL) {
     try {
+        global $_domain;
+        $subdomain = $_domain['subdomain']; // This is with the port if it's not :80
+
+        $projectIdsPerSubdomain = explode("\n", $payment_method['settings']['projectId']);
+        $generalProjectId = '';
+        $projectId = '';
+        foreach($projectIdsPerSubdomain as $projectIdWithSubdomain) {
+            $exploaded = explode(':', $projectIdWithSubdomain);
+            if(count($exploaded) == 1) {
+                $generalProjectId = trim($exploaded[0]);
+            } else {
+                if(count($exploaded) == 2) {
+                    if($exploaded[0] == $subdomain) {
+                        $projectId = trim($exploaded[1]);
+                        break;
+                    }
+                } else {
+                    $potentialProjectId = trim(array_pop($exploaded));
+                    $checkSubdomain = implode(':', $exploaded);
+                    if($checkSubdomain == $subdomain) {
+                        $projectId = $potentialProjectId;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if(empty($projectId)) {
+          $projectId = $generalProjectId;
+        }
+
+        $passwordsPerProject = explode("\n", $payment_method['settings']['projectPass']);
+        $generalPassword = '';
+        $password = '';
+        foreach($passwordsPerProject as $projectIdWithPassword) {
+          $exploaded = explode(':', $projectIdWithPassword);
+          if(count($exploaded) == 1) {
+            $generalPassword = trim($exploaded[0]);
+          } else {
+            if($exploaded[0] == $projectId) {
+              $password = trim($exploaded[1]);
+              break;
+            }
+          }
+        }
+        if(empty($password)) {
+          $password = $generalPassword;
+        }
+
         $data = WebToPay::checkResponse(
             $_REQUEST,
             array(
-                'projectid'     => $payment_method['settings']['projectId'],
-                'sign_password' => $payment_method['settings']['projectPass'],
+                'projectid'     => $projectId,
+                'sign_password' => $password,
             )
         );
     } catch (Exception $e) {
