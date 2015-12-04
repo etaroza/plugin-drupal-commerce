@@ -24,6 +24,15 @@ function commerce_paysera_menu() {
         'type'            => MENU_CALLBACK,
     );
 
+    // When the payment is deferred we might not get back the callback from Paysera. So we can force the successful payment manually
+    $items['commerce_paysera/force/success/order/%'] = array(
+      'page callback'   => 'commerce_paysera_force_successful_payment',
+      'page arguments'  => array(4),
+      'access callback' => 'user_access',
+      'access arguments' => array('administer access control'), // Only admins can do it
+      'type'            => MENU_CALLBACK,
+    );
+
     return $items;
 }
 
@@ -186,6 +195,25 @@ function commerce_paysera_process_ipn($payment_method = NULL) {
     watchdog('commerce_paysera', 'IPN processed for order @order_number with transaction @txn_id.', array('@txn_id' => $transaction->transaction_id, '@order_number' => $orderData->order_number), WATCHDOG_INFO);
 
     exit('OK'); // Required by Paysera to digest the callback properly
+}
+
+function commerce_paysera_force_successful_payment($orderid) {
+    $payments = commerce_payment_transaction_load_multiple(array(), array('order_id' => $orderid));
+    // Assuming there's only one payment transaction done per order
+    $transaction = !empty($payments) ? array_shift($payments) : NULL;
+
+    if (!is_null($transaction)) {
+        watchdog('commerce_paysera', 'Found existing transaction.', array(), WATCHDOG_DEBUG);
+    } else {
+        die("Transaction doesn't exist for order $orderid");
+    }
+
+    $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+    $transaction->message = t('Forced successful payment');
+
+    commerce_payment_transaction_save($transaction);
+
+    die("Forced successful payment for order $orderid. If the order hasn't been paid before then the rules will trigger with the event 'commerce_payment_order_paid_in_full'");
 }
 
 /**
